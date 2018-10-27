@@ -1,14 +1,15 @@
+---
 layout:     post
-title:     RxJava
+title:      RxJava
 subtitle:   RxJava介绍
 date:       2018-10-27
 author:     FS
 
 catalog: true
-
 tags:
     - RxJava
 
+---
 # RxJava 
 
 ## 什么是RxJava？

@@ -1,3 +1,4 @@
+---
 layout:     post
 title:      RxJava
 subtitle:   RxJavaPlugins
@@ -8,6 +9,7 @@ catalog: true
 tags:
     - RxJava
 
+---
 # RxJavaPlugins
 
 
