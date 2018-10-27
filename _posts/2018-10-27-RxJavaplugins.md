@@ -10,7 +10,6 @@ tags:
     - RxJava
 
 ---
-# RxJavaPlugins
 
 
 ```Java
