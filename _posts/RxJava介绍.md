@@ -1,0 +1,476 @@
+---
+layout:     post
+title:      RxJava
+subtitle:   RxJava介绍
+date:       2018-10-27
+author:     FS
+
+catalog: true
+tags:
+    - RxJava
+
+---
+# RxJava 
+
+## 什么是RxJava？
+> RxJava – Reactive Extensions for the JVM – a library for composing asynchronous and event-based programs using observable sequences for the Java VM.
+
+这是RxJava在Github主页上的解释，翻译过来就是，一个在Java VM上使用可观察的序列来组成异步和基于事件的程序的库。简单的说就是用于实现异步的库，相比于AsyncTask和Handler，随着程序的复杂RxJava依旧能保持很好的简洁性。为什么说RxJava是简洁的，因为它的操作符和观察者模式，在源码中装饰器模式也很有体现。
+
+## 一、 观察者模式
+[观察者模式](http://note.youdao.com/noteshare?id=a5acab910454cfdc0bc8405931285e24)
+
+
+## 二、 操作符
+
+### 2.1 创建操作
+
+#### 2.1.1  create
+先来看看如何使用create操作符，
+```Java
+//  create操作符接受一个ObservableOnSubscribe类型的匿名内部类
+    public static void test1() {
+        Observable<String> observable1 = Observable
+                .create(new ObservableOnSubscribe<String>() {
+                    @Override
+                    public void subscribe(ObservableEmitter<String> emitter) throws Exception {
+                        System.out.println("发送one");
+                        emitter.onNext("one");
+
+                        System.out.println("发送two");
+                        emitter.onNext("two");
+
+                        System.out.println("发送three");
+                        emitter.onNext("three");
+
+                        System.out.println("发送four");
+                        emitter.onNext("four");
+                        emitter.onComplete();
+                    }
+                });
+
+        Observer<String> observer = new Observer<String>() {
+
+            // 调用dispose会使观察者不再接收事件
+            Disposable disposable;
+            @Override
+            public void onSubscribe(Disposable d) {
+                System.out.println("开始接收");
+                disposable = d;
+            }
+            @Override
+
+            public void onNext(String s) {
+                if (s.equals("three")) {
+                    // 切断
+                    disposable.dispose();
+                }
+                System.out.println("这是在接收事件---" + s);
+
+            }
+
+            @Override
+            public void onError(Throwable e) {
+                System.out.println("除了错误" + e);
+            }
+
+            @Override
+            public void onComplete() {
+                System.out.println("完成接受");
+            }
+        };
+
+        observable1.subscribe(observer);
+    }
+
+```
+上源码，关于RxJavaPlugins已在专门的一篇文章中分析过。
+```Java
+    public static <T> Observable<T> create(ObservableOnSubscribe<T> source) {
+        ObjectHelper.requireNonNull(source, "source is null");
+        return RxJavaPlugins.onAssembly(new ObservableCreate<T>(source));
+    }
+```
+可以看到传入的不是一个Observable而是ObservableOnSubscribe，看一下接口的代码，
+```Java
+/**
+ * A functional interface that has a {@code subscribe()} method that receives
+ * an instance of an {@link ObservableEmitter} instance that allows pushing
+ * events in a cancellation-safe manner.
+ *
+ * @param <T> the value type pushed
+ */
+public interface ObservableOnSubscribe<T> {
+
+    /**
+     * Called for each Observer that subscribes.
+     * @param emitter the safe emitter instance, never null
+     * @throws Exception on error
+     */
+    void subscribe(@NonNull ObservableEmitter<T> emitter) throws Exception;
+}
+```
+我的理解是，它更安全。再看之前的代码，这里明显是一个包装类，再看ObservableCreate类的代码，
+```Java
+public final class ObservableCreate<T> extends Observable<T> {
+
+    @Override
+    protected void subscribeActual(Observer<? super T> observer) {
+        CreateEmitter<T> parent = new CreateEmitter<T>(observer);
+        // 调用observer的onSubscribe方法，传入实现好的Disposable对象
+        observer.onSubscribe(parent);
+
+        try {
+        // 调用内部类实现的方法
+            source.subscribe(parent);
+        } catch (Throwable ex) {
+            Exceptions.throwIfFatal(ex);
+            parent.onError(ex);
+        }
+    }
+    
+       static final class CreateEmitter<T>
+    extends AtomicReference<Disposable>
+    implements ObservableEmitter<T>, Disposable {
+        // 代码...
+        
+                @Override
+        public void onNext(T t) {
+            if (t == null) {
+                onError(new NullPointerException("onNext called with null. Null values are generally not allowed in 2.x operators and sources."));
+                return;
+            }
+            if (!isDisposed()) {
+                observer.onNext(t);
+            }
+        }
+        
+                @Override
+        public void onComplete() {
+            if (!isDisposed()) {
+                try {
+                    observer.onComplete();
+                } finally {
+                    dispose();
+                }
+            }
+        }
+        
+                @Override
+        public void onComplete() {
+            if (!isDisposed()) {
+                try {
+                    observer.onComplete();
+                } finally {
+                    dispose();
+                }
+            }
+        }
+    //  代码...
+    }
+
+}
+```
+从这里可以看到，在subscribeActual方法中又将observer进行包装，包装的好处是什么呢，可以看到在原本的onNext操作中又加入了空判断，并且在onComplete方法中调用了dispose方法用来取消订阅。这应该就是之前所说的更安全吧。
+
+### 2.2 Do操作符
+
+Do系列操作符就是为原始Observable的生命周期事件注册一个回调，当Observable的某个事件发生时就会调用这些回调。
+#### 2.2.1  doOnSubscribe
+
+当观察者订阅Observable时会调用这个方法。
+
+```Java
+    @CheckReturnValue
+    @SchedulerSupport(SchedulerSupport.NONE)
+    public final Observable<T> doOnSubscribe(Consumer<? super Disposable> onSubscribe) {
+        return doOnLifecycle(onSubscribe, Functions.EMPTY_ACTION);
+    }
+    
+        @CheckReturnValue
+    @SchedulerSupport(SchedulerSupport.NONE)
+    public final Observable<T> doOnLifecycle(final Consumer<? super Disposable> onSubscribe, final Action onDispose) {
+        ObjectHelper.requireNonNull(onSubscribe, "onSubscribe is null");
+        ObjectHelper.requireNonNull(onDispose, "onDispose is null");
+        return RxJavaPlugins.onAssembly(new ObservableDoOnLifecycle<T>(this, onSubscribe, onDispose));
+    }
+
+
+```
+和其他操作符没什么区别，又是一个包装类，
+```Java
+public final class ObservableDoOnLifecycle<T> extends AbstractObservableWithUpstream<T, T> {
+    private final Consumer<? super Disposable> onSubscribe;
+    private final Action onDispose;
+
+    public ObservableDoOnLifecycle(Observable<T> upstream, Consumer<? super Disposable> onSubscribe,
+            Action onDispose) {
+        super(upstream);
+        this.onSubscribe = onSubscribe;
+        this.onDispose = onDispose;
+    }
+
+    @Override
+    protected void subscribeActual(Observer<? super T> observer) {
+        source.subscribe(new DisposableLambdaObserver<T>(observer, onSubscribe, onDispose));
+    }
+}
+```
+做了一些初始化工作，在subscribeActual中调用传入Observable的subscribe方法，并且将订阅的Observer包装，
+```Java
+public final class DisposableLambdaObserver<T> implements Observer<T>, Disposable {
+        @Override
+    public void onSubscribe(Disposable s) {
+        // this way, multiple calls to onSubscribe can show up in tests that use doOnSubscribe to validate behavior
+        try {
+            onSubscribe.accept(s);
+        } catch (Throwable e) {
+            Exceptions.throwIfFatal(e);
+            s.dispose();
+            this.s = DisposableHelper.DISPOSED;
+            EmptyDisposable.error(e, actual);
+            return;
+        }
+        if (DisposableHelper.validate(this.s, s)) {
+            this.s = s;
+            actual.onSubscribe(this);
+        }
+    }
+
+}
+```
+这是核心代码，当Observer的onSubscribe方法被调用时，就会调用Consumer的accept方法，也就是传入的Consumer的匿名内部类。
+
+### 2.3  线程切换
+
+RxJava可以使用subscribeOn方法和observerOn方法来分别指定Observable和Observer在哪种线程工作，线程的指定是通过Schedulers（调度器）来实现的，RxJava中有六种调度器，
+![image](https://raw.githubusercontent.com/Funsquirrel/Funsquirrel.github.io/master/img/%E8%B0%83%E5%BA%A6%E5%99%A8%E7%B1%BB%E5%9E%8B.PNG)
+还有就是AndroidSchedulers的mainThread，也就是主线程。
+#### 2.3.1  subscribeOn
+
+
+
+```Java
+public final class ObservableSubscribeOn<T> extends AbstractObservableWithUpstream<T, T> {
+
+    // 截取部分
+        @Override
+    public void subscribeActual(final Observer<? super T> s) {
+        final SubscribeOnObserver<T> parent = new SubscribeOnObserver<T>(s);
+        s.onSubscribe(parent);
+        parent.setDisposable(scheduler.scheduleDirect(new SubscribeTask(parent)));
+    }
+}
+
+    final class SubscribeTask implements Runnable {
+        private final SubscribeOnObserver<T> parent;
+
+        SubscribeTask(SubscribeOnObserver<T> parent) {
+            this.parent = parent;
+        }
+        @Override
+        public void run() {
+            source.subscribe(parent);
+        }
+    }
+
+```
+
+从上面的代码可以看出SubscribeTask类实现了Runnable接口，并且在run方法中执行了 
+```Java
+source.subscribe(parent);
+```
+run方法中的代码将会在制定的线程中执行，那么这个Runnable是如何传递给线程执行的呢？可以看到Scheduler调用了scheduleDirect方法，
+```Java
+    @NonNull
+    public Disposable scheduleDirect(@NonNull Runnable run, long delay, @NonNull TimeUnit unit) {
+        final Worker w = createWorker();
+        final Runnable decoratedRun = RxJavaPlugins.onSchedule(run);
+        DisposeTask task = new DisposeTask(decoratedRun, w);
+        w.schedule(task, delay, unit);
+        return task;
+    }
+```
+DisposeTask类进一步封装，由于Scheduler是一个抽象类，所以还要看具体的实现类，这里就看进行IO操作的实现类，
+直接看IoScheduler类中的Worker类，这个类中的所有方法都是线程安全的。
+```Java
+        public Disposable schedule(@NonNull Runnable action, long delayTime, @NonNull TimeUnit unit) {
+            if (tasks.isDisposed()) {
+                // don't schedule, we are unsubscribed
+                return EmptyDisposable.INSTANCE;
+            }
+
+            return threadWorker.scheduleActual(action, delayTime, unit, tasks);
+        }
+    }
+```
+再看scheduleActual方法的代码，
+```Java
+    @NonNull
+    public ScheduledRunnable scheduleActual(final Runnable run, long delayTime, @NonNull TimeUnit unit, @Nullable DisposableContainer parent) {
+        Runnable decoratedRun = RxJavaPlugins.onSchedule(run);
+
+        ScheduledRunnable sr = new ScheduledRunnable(decoratedRun, parent);
+
+        if (parent != null) {
+            if (!parent.add(sr)) {
+                return sr;
+            }
+        }
+        Future<?> f;
+        try {
+            if (delayTime <= 0) {
+                f = executor.submit((Callable<Object>)sr);
+            } else {
+                f = executor.schedule((Callable<Object>)sr, delayTime, unit);
+            }
+            sr.setFuture(f);
+        } catch (RejectedExecutionException ex) {
+            if (parent != null) {
+                parent.remove(sr);
+            }
+            RxJavaPlugins.onError(ex);
+        }
+
+        return sr;
+    }
+
+```
+> - ThreadWorker  工作的线程 是有一个核心池的线程池       
+> - CacheWorkerPool  具有缓存功能的线程池，每次需要线程的时候都会从ConcurrentLinkedQueue中寻找，如果为空的话则创建一个工作线程
+> - ScheduledExecutorService  将定时任务和线程池结合
+> - ConcurrentLinkedQueue 一个基于链接节点的无界线程安全队列
+> - ThreadFactory   线程工厂为了统一在创建线程时设置一些参数，如是否守护线程。线程一些特性等，如优先级
+
+
+有源码可知，执行Runnable的方法最终由NewThreadWorker完成，这个类中有一个线程池，由这个线程池最终进行执行Runnable的操作。
+也可以利用调度器调度自己的任务，
+```Java
+        NewThreadWorker worker = (NewThreadWorker) Schedulers.newThread().createWorker();
+        worker.schedule(new Runnable() {
+            @Override
+            public void run() {
+                Log.e("TAG", "自定义调度" + Thread.currentThread().getName());
+            }
+        });
+
+```
+### 2.3.2  observerOn
+
+```Java
+        @Override
+        public void onSubscribe(Disposable s) {
+            if (DisposableHelper.validate(this.s, s)) {
+                this.s = s;
+                if (s instanceof QueueDisposable) {
+                    @SuppressWarnings("unchecked")
+                    QueueDisposable<T> qd = (QueueDisposable<T>) s;
+                    
+                    int m = qd.requestFusion(QueueDisposable.ANY | QueueDisposable.BOUNDARY);
+                    //  判断模式 
+                    if (m == QueueDisposable.SYNC) {
+                        sourceMode = m;
+                        queue = qd;
+                        done = true;
+                        actual.onSubscribe(this);
+                        // 同步模式下 直接调度
+                        schedule();
+                        return;
+                    }
+                    //  异步模式等待
+                    if (m == QueueDisposable.ASYNC) {
+                        sourceMode = m;
+                        queue = qd;
+                        actual.onSubscribe(this);
+                        return;
+                    }
+                }
+
+                queue = new SpscLinkedArrayQueue<T>(bufferSize);
+
+                actual.onSubscribe(this);
+            }
+        }
+
+```
+
+
+```Java
+        @Override
+        public void onNext(T t) {
+            if (done) {
+                return;
+            }
+            //  数据源不是异步类型 将下发的数据压入queue中
+            if (sourceMode != QueueDisposable.ASYNC) {
+                queue.offer(t);
+            }
+            schedule();
+        }
+```
+再看schedule方法，
+```Java
+        void schedule() {
+            if (getAndIncrement() == 0) {
+                worker.schedule(this);
+            }
+        }
+
+```
+这里由于ObservableObserverOn类是实现了Runnable接口，所以会调用自身的run方法，再看这里的checkTerminated，这个方法返回true的条件是，订阅被取消，onNext被调度完，onComplete或者onError方法调用
+。drainNormal就是从队列中取出参数T，然后做了一些检查，最后调用其onNext。
+
+### 2.4  变换操作
+
+```Java
+public final class ObservableMap<T, U> extends AbstractObservableWithUpstream<T, U> {
+    final Function<? super T, ? extends U> function;
+
+    public ObservableMap(ObservableSource<T> source, Function<? super T, ? extends U> function) {
+        super(source);
+        this.function = function;
+    }
+
+    @Override
+    public void subscribeActual(Observer<? super U> t) {
+        source.subscribe(new MapObserver<T, U>(t, function));
+    }
+
+
+    static final class MapObserver<T, U> extends BasicFuseableObserver<T, U> {
+        final Function<? super T, ? extends U> mapper;
+
+        MapObserver(Observer<? super U> actual, Function<? super T, ? extends U> mapper) {
+            super(actual);
+            this.mapper = mapper;
+        }
+
+        @Override
+        public void onNext(T t) {
+            if (done) {
+                return;
+            }
+
+            if (sourceMode != NONE) {
+                actual.onNext(null);
+                return;
+            }
+
+            U v;
+
+            try {
+                v = ObjectHelper.requireNonNull(mapper.apply(t), "The mapper function returned a null value.");
+            } catch (Throwable ex) {
+                fail(ex);
+                return;
+            }
+            actual.onNext(v);
+        }
+
+  
+    }
+}
+
+```
+map的源码很简单，通过一个Function的apply方法完成转换。
+
